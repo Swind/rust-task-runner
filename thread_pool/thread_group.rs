@@ -180,17 +180,20 @@ fn worker_loop(group: Arc<ThreadGroup>) {
         let _token_guard = ScopedSequenceToken::new(env.token);
         let _default_handle = env.task_runner.map(CurrentDefaultHandle::new);
 
-        match source.will_run_task() {
-            RunStatus::Disallowed => {}
+        // Only clear has_worker and re-enqueue when we actually claimed the sequence.
+        // If Disallowed, another worker already owns it; calling did_process_task() here
+        // would clear that worker's has_worker flag and allow concurrent execution.
+        let claimed = match source.will_run_task() {
+            RunStatus::Disallowed => false,
             _ => {
                 if let Some(task) = source.take_task() {
                     (task.callback)();
                 }
+                true
             }
-        }
+        };
 
-        // did_process_task clears has_worker and returns true if more ready tasks remain.
-        if source.did_process_task() {
+        if claimed && source.did_process_task() {
             group.push_task_source(source);
         }
     }

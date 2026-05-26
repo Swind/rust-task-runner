@@ -4,6 +4,7 @@ use std::time::Duration;
 use crate::task::Task;
 use crate::task_runner::TaskRunner;
 use crate::task_traits::TaskTraits;
+use crate::thread_pool::delayed_task_manager::DelayedTaskManager;
 use crate::thread_pool::sequence::Sequence;
 use crate::thread_pool::thread_group::ThreadGroup;
 
@@ -12,11 +13,16 @@ use crate::thread_pool::thread_group::ThreadGroup;
 pub struct PooledParallelTaskRunner {
     traits: TaskTraits,
     thread_group: Arc<ThreadGroup>,
+    delayed_task_manager: Arc<DelayedTaskManager>,
 }
 
 impl PooledParallelTaskRunner {
-    pub fn new(traits: TaskTraits, thread_group: Arc<ThreadGroup>) -> Self {
-        Self { traits, thread_group }
+    pub fn new(
+        traits: TaskTraits,
+        thread_group: Arc<ThreadGroup>,
+        delayed_task_manager: Arc<DelayedTaskManager>,
+    ) -> Self {
+        Self { traits, thread_group, delayed_task_manager }
     }
 }
 
@@ -36,15 +42,7 @@ impl TaskRunner for PooledParallelTaskRunner {
         let ready_time = std::time::Instant::now() + delay;
         let seq = Arc::new(Sequence::new(self.traits));
         seq.push_delayed_task(Task::new(callback), ready_time);
-        // Temporary: spawn a one-shot timer thread.  Phase 4's DelayedTaskManager replaces this.
-        let thread_group = Arc::clone(&self.thread_group);
-        std::thread::spawn(move || {
-            let now = std::time::Instant::now();
-            if ready_time > now {
-                std::thread::sleep(ready_time - now);
-            }
-            thread_group.push_task_source(seq);
-        });
+        self.delayed_task_manager.add_sequence(ready_time, seq);
         true
     }
 
@@ -68,33 +66,35 @@ impl TaskRunner for PooledParallelTaskRunner {
 mod tests {
     use super::*;
     use crate::task_traits::TaskTraits;
+    use crate::thread_pool::delayed_task_manager::DelayedTaskManager;
     use crate::thread_pool::thread_group::ThreadGroup;
     use std::sync::{Arc, Barrier, Mutex};
 
+    fn make_runner(num_threads: usize) -> (Arc<ThreadGroup>, Arc<DelayedTaskManager>, PooledParallelTaskRunner) {
+        let group = ThreadGroup::new(num_threads);
+        let dtm = DelayedTaskManager::new(Arc::clone(&group));
+        let runner = PooledParallelTaskRunner::new(TaskTraits::default(), Arc::clone(&group), Arc::clone(&dtm));
+        (group, dtm, runner)
+    }
+
     #[test]
     fn tasks_run_in_parallel() {
-        // Two tasks that both wait at the same Barrier(3) — if they ran sequentially,
-        // neither would ever unblock the other and this test would deadlock.
-        let group = ThreadGroup::new(4);
-        let runner = PooledParallelTaskRunner::new(TaskTraits::default(), Arc::clone(&group));
-
+        let (group, dtm, runner) = make_runner(4);
         let barrier = Arc::new(Barrier::new(3));
 
         for _ in 0..2 {
             let b = Arc::clone(&barrier);
-            runner.post_task(Box::new(move || {
-                b.wait();
-            }));
+            runner.post_task(Box::new(move || { b.wait(); }));
         }
 
         barrier.wait();
         group.join_all();
+        dtm.shutdown();
     }
 
     #[test]
     fn all_tasks_execute() {
-        let group = ThreadGroup::new(5); // at least as many as the number of tasks
-        let runner = PooledParallelTaskRunner::new(TaskTraits::default(), Arc::clone(&group));
+        let (group, dtm, runner) = make_runner(5); // at least as many as the number of tasks
 
         let counter = Arc::new(Mutex::new(0usize));
         let barrier = Arc::new(Barrier::new(6)); // 5 tasks + test thread
@@ -110,6 +110,7 @@ mod tests {
 
         barrier.wait();
         group.join_all();
+        dtm.shutdown();
 
         assert_eq!(*counter.lock().unwrap(), 5);
     }

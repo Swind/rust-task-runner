@@ -6,19 +6,26 @@ use crate::sequence_token::SequenceToken;
 use crate::task::Task;
 use crate::task_runner::TaskRunner;
 use crate::task_traits::TaskTraits;
+use crate::thread_pool::delayed_task_manager::DelayedTaskManager;
 use crate::thread_pool::sequence::Sequence;
 use crate::thread_pool::thread_group::ThreadGroup;
 
 pub struct PooledSequencedTaskRunner {
     sequence: Arc<Sequence>,
     thread_group: Arc<ThreadGroup>,
+    delayed_task_manager: Arc<DelayedTaskManager>,
 }
 
 impl PooledSequencedTaskRunner {
-    pub fn new(traits: TaskTraits, thread_group: Arc<ThreadGroup>) -> Arc<Self> {
+    pub fn new(
+        traits: TaskTraits,
+        thread_group: Arc<ThreadGroup>,
+        delayed_task_manager: Arc<DelayedTaskManager>,
+    ) -> Arc<Self> {
         let runner = Arc::new(Self {
             sequence: Arc::new(Sequence::new(traits)),
             thread_group,
+            delayed_task_manager,
         });
         // Wire back-reference so tasks can re-post to the same sequence via current_default().
         let weak: Weak<dyn SequencedTaskRunner> = Arc::downgrade(&runner) as Weak<dyn SequencedTaskRunner>;
@@ -41,17 +48,7 @@ impl TaskRunner for PooledSequencedTaskRunner {
     ) -> bool {
         let ready_time = std::time::Instant::now() + delay;
         self.sequence.push_delayed_task(Task::new(callback), ready_time);
-        // Temporary: spawn a one-shot timer thread that pushes the sequence once the
-        // deadline passes.  Phase 4's DelayedTaskManager will replace this.
-        let sequence = Arc::clone(&self.sequence);
-        let thread_group = Arc::clone(&self.thread_group);
-        std::thread::spawn(move || {
-            let now = std::time::Instant::now();
-            if ready_time > now {
-                std::thread::sleep(ready_time - now);
-            }
-            thread_group.push_task_source(sequence);
-        });
+        self.delayed_task_manager.add_sequence(ready_time, Arc::clone(&self.sequence));
         true
     }
 
@@ -91,15 +88,28 @@ impl SequencedTaskRunner for PooledSequencedTaskRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::thread_pool::thread_group::ThreadGroup;
     use crate::task_traits::TaskTraits;
+    use crate::thread_pool::delayed_task_manager::DelayedTaskManager;
+    use crate::thread_pool::thread_group::ThreadGroup;
     use std::sync::{Arc, Barrier, Mutex};
     use std::time::Duration;
 
+    fn make_runner(
+        num_threads: usize,
+    ) -> (Arc<ThreadGroup>, Arc<DelayedTaskManager>, Arc<PooledSequencedTaskRunner>) {
+        let group = ThreadGroup::new(num_threads);
+        let dtm = DelayedTaskManager::new(Arc::clone(&group));
+        let runner = PooledSequencedTaskRunner::new(
+            TaskTraits::default(),
+            Arc::clone(&group),
+            Arc::clone(&dtm),
+        );
+        (group, dtm, runner)
+    }
+
     #[test]
     fn tasks_execute_in_order() {
-        let group = ThreadGroup::new(4);
-        let runner = PooledSequencedTaskRunner::new(TaskTraits::default(), Arc::clone(&group));
+        let (group, dtm, runner) = make_runner(4);
 
         let results = Arc::new(Mutex::new(Vec::new()));
         let barrier = Arc::new(Barrier::new(2));
@@ -109,21 +119,18 @@ mod tests {
             let r = Arc::clone(&results);
             runner.post_task(Box::new(move || r.lock().unwrap().push(i)));
         }
-
-        runner.post_task(Box::new(move || {
-            b.wait();
-        }));
+        runner.post_task(Box::new(move || { b.wait(); }));
 
         barrier.wait();
         group.join_all();
+        dtm.shutdown();
 
         assert_eq!(*results.lock().unwrap(), vec![0, 1, 2, 3, 4]);
     }
 
     #[test]
     fn runs_tasks_in_current_sequence_is_true_inside_task() {
-        let group = ThreadGroup::new(2);
-        let runner = PooledSequencedTaskRunner::new(TaskTraits::default(), Arc::clone(&group));
+        let (group, dtm, runner) = make_runner(2);
 
         let result = Arc::new(Mutex::new(false));
         let r = Arc::clone(&result);
@@ -138,52 +145,49 @@ mod tests {
 
         barrier.wait();
         group.join_all();
+        dtm.shutdown();
 
         assert!(*result.lock().unwrap());
     }
 
     #[test]
     fn post_task_and_reply_executes_reply_on_caller_sequence() {
-        // Two sequenced runners: runner_a posts a task-and-reply; the reply must land on runner_a.
         let group = ThreadGroup::new(4);
-        let runner_a = PooledSequencedTaskRunner::new(TaskTraits::default(), Arc::clone(&group));
-        let runner_b = PooledSequencedTaskRunner::new(TaskTraits::default(), Arc::clone(&group));
+        let dtm = DelayedTaskManager::new(Arc::clone(&group));
+
+        let runner_a = PooledSequencedTaskRunner::new(
+            TaskTraits::default(), Arc::clone(&group), Arc::clone(&dtm));
+        let runner_b = PooledSequencedTaskRunner::new(
+            TaskTraits::default(), Arc::clone(&group), Arc::clone(&dtm));
 
         let reply_sequence = Arc::new(Mutex::new(None::<SequenceToken>));
         let rs = Arc::clone(&reply_sequence);
         let barrier = Arc::new(Barrier::new(2));
         let b = Arc::clone(&barrier);
 
-        // post_task_and_reply from within runner_a's sequence
         let runner_a_clone = Arc::clone(&runner_a);
         let runner_b_clone = Arc::clone(&runner_b);
         runner_a.post_task(Box::new(move || {
-            // This closure runs on runner_a, so current_default() == runner_a.
             runner_b_clone.post_task_and_reply(
                 Box::new(|| {}),
                 Box::new(move || {
-                    // reply should run on runner_a's sequence
                     *rs.lock().unwrap() = SequenceToken::current();
                     b.wait();
                 }),
             );
-            // yield so the reply has a chance to be dispatched
             drop(runner_a_clone);
         }));
 
         barrier.wait();
         group.join_all();
+        dtm.shutdown();
 
-        assert_eq!(
-            *reply_sequence.lock().unwrap(),
-            Some(runner_a.sequence_token())
-        );
+        assert_eq!(*reply_sequence.lock().unwrap(), Some(runner_a.sequence_token()));
     }
 
     #[test]
     fn delayed_task_executes_after_deadline() {
-        let group = ThreadGroup::new(2);
-        let runner = PooledSequencedTaskRunner::new(TaskTraits::default(), Arc::clone(&group));
+        let (group, dtm, runner) = make_runner(2);
 
         let executed = Arc::new(Mutex::new(false));
         let e = Arc::clone(&executed);
@@ -195,11 +199,12 @@ mod tests {
                 *e.lock().unwrap() = true;
                 b.wait();
             }),
-            Duration::from_millis(1),
+            Duration::from_millis(10),
         );
 
         barrier.wait();
         group.join_all();
+        dtm.shutdown();
 
         assert!(*executed.lock().unwrap());
     }
