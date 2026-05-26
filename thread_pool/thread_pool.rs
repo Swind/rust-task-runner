@@ -108,8 +108,9 @@ impl ThreadPool {
             {
                 return;
             }
-            tracker.before_run_task(&traits);
             callback();
+            // BlockShutdown count was incremented at post time (will_post_task),
+            // so we only need to decrement here after execution completes.
             tracker.after_run_task(&traits);
         })
     }

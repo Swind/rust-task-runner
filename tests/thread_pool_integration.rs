@@ -5,6 +5,7 @@ use rust_task::{
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Condvar, Mutex};
+use std::thread;
 use std::time::Duration;
 
 // A countdown latch: blocks the caller until count_down() has been called N times.
@@ -523,4 +524,78 @@ fn stress_sequenced_runner_with_many_competing_workers() {
 
     latch.wait();
     pool.shutdown();
+}
+
+// ── 9. BlockShutdown queued-task guarantees ───────────────────────────────────
+
+// Verifies that shutdown() waits for a BlockShutdown task that was posted
+// AFTER the worker is already busy — i.e., the task sits in the queue and has
+// not yet started executing when shutdown() is called.
+#[test]
+fn shutdown_waits_for_queued_block_shutdown_task() {
+    // Single worker so the second task is guaranteed to be queued when the
+    // first task is still running.
+    let pool = ThreadPool::new(1);
+
+    // Barrier that lets us know the first task is executing (worker is busy).
+    let start_barrier = Arc::new(Barrier::new(2));
+    let sb = Arc::clone(&start_barrier);
+    // Barrier that lets us release the first task so the worker becomes free.
+    let release_barrier = Arc::new(Barrier::new(2));
+    let rb = Arc::clone(&release_barrier);
+
+    let block_shutdown_executed = Arc::new(Mutex::new(false));
+    let e = Arc::clone(&block_shutdown_executed);
+
+    // First task: occupies the single worker.
+    pool.post_task(default_traits(), Box::new(move || {
+        sb.wait();  // signal: worker is now busy
+        rb.wait();  // wait until test thread releases us
+    }));
+
+    start_barrier.wait(); // wait until worker is busy
+
+    // Post BlockShutdown task — it lands in the queue (worker is still busy).
+    pool.post_task(traits_with(TaskShutdownBehavior::BlockShutdown), Box::new(move || {
+        *e.lock().unwrap() = true;
+    }));
+
+    // Call shutdown() in a background thread so we can also release the first task.
+    let pool_clone = Arc::clone(&pool);
+    let shutdown_handle = thread::spawn(move || pool_clone.shutdown());
+
+    // Release the first task so the worker can proceed to the BlockShutdown task.
+    release_barrier.wait();
+
+    shutdown_handle.join().unwrap();
+    assert!(*block_shutdown_executed.lock().unwrap(),
+        "shutdown() returned before the queued BlockShutdown task executed");
+}
+
+// Posts many BlockShutdown tasks and verifies all of them complete before
+// shutdown() returns, even under concurrent execution across multiple workers.
+#[test]
+fn shutdown_waits_for_all_queued_block_shutdown_tasks() {
+    const BLOCK_TASKS: usize = 10;
+
+    let pool = ThreadPool::new(4);
+    let executed = Arc::new(AtomicUsize::new(0));
+    let latch = Latch::new(BLOCK_TASKS);
+
+    for _ in 0..BLOCK_TASKS {
+        let e = Arc::clone(&executed);
+        let l = Arc::clone(&latch);
+        pool.post_task(traits_with(TaskShutdownBehavior::BlockShutdown), Box::new(move || {
+            e.fetch_add(1, Ordering::Relaxed);
+            l.count_down();
+        }));
+    }
+
+    pool.shutdown();
+
+    assert_eq!(
+        executed.load(Ordering::SeqCst),
+        BLOCK_TASKS,
+        "not all BlockShutdown tasks ran before shutdown() completed"
+    );
 }
