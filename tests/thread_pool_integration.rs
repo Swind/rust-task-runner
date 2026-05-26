@@ -3,8 +3,37 @@
 use rust_task::{
     SequenceToken, TaskPriority, TaskShutdownBehavior, TaskTraits, ThreadPolicy, ThreadPool,
 };
-use std::sync::{Arc, Barrier, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Barrier, Condvar, Mutex};
 use std::time::Duration;
+
+// A countdown latch: blocks the caller until count_down() has been called N times.
+// Cleaner than Barrier for cases where the N tasks don't all need to wait for each other.
+struct Latch {
+    count: Mutex<usize>,
+    cvar: Condvar,
+}
+
+impl Latch {
+    fn new(n: usize) -> Arc<Self> {
+        Arc::new(Self { count: Mutex::new(n), cvar: Condvar::new() })
+    }
+
+    fn count_down(&self) {
+        let mut c = self.count.lock().unwrap();
+        *c -= 1;
+        if *c == 0 {
+            self.cvar.notify_all();
+        }
+    }
+
+    fn wait(&self) {
+        let mut c = self.count.lock().unwrap();
+        while *c > 0 {
+            c = self.cvar.wait(c).unwrap();
+        }
+    }
+}
 
 fn default_traits() -> TaskTraits {
     TaskTraits::default()
@@ -311,4 +340,187 @@ fn delayed_task_does_not_execute_before_deadline() {
     pool.shutdown();
 
     assert_eq!(*order.lock().unwrap(), vec!["immediate", "delayed"]);
+}
+
+// ── 8. Stress tests ──────────────────────────────────────────────────────────
+
+// Single sequenced runner, 1000 tasks: verify strict FIFO across many tasks.
+#[test]
+fn stress_sequenced_runner_1000_tasks_in_order() {
+    const N: usize = 1000;
+    let pool = ThreadPool::new(8);
+    let runner = pool.create_sequenced_task_runner(default_traits());
+
+    // Each task records the value of the counter at the time it runs.
+    // Because tasks execute one at a time in FIFO order, task i must see counter == i.
+    let counter = Arc::new(AtomicUsize::new(0));
+    let latch = Latch::new(N);
+
+    for i in 0..N {
+        let c = Arc::clone(&counter);
+        let l = Arc::clone(&latch);
+        runner.post_task(Box::new(move || {
+            let prev = c.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(prev, i, "task {} ran out of order (counter was {})", i, prev);
+            l.count_down();
+        }));
+    }
+
+    latch.wait();
+    pool.shutdown();
+    assert_eq!(counter.load(Ordering::SeqCst), N);
+}
+
+// 50 independent sequenced runners, 100 tasks each: each runner must maintain
+// its own order while all runners execute concurrently.
+#[test]
+fn stress_50_sequenced_runners_100_tasks_each() {
+    const RUNNERS: usize = 50;
+    const TASKS_PER_RUNNER: usize = 100;
+
+    let pool = ThreadPool::new(16);
+    let latch = Latch::new(RUNNERS * TASKS_PER_RUNNER);
+
+    for _ in 0..RUNNERS {
+        let runner = pool.create_sequenced_task_runner(default_traits());
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        for i in 0..TASKS_PER_RUNNER {
+            let c = Arc::clone(&counter);
+            let l = Arc::clone(&latch);
+            runner.post_task(Box::new(move || {
+                let prev = c.fetch_add(1, Ordering::SeqCst);
+                assert_eq!(prev, i, "out-of-order execution in runner");
+                l.count_down();
+            }));
+        }
+    }
+
+    latch.wait();
+    pool.shutdown();
+}
+
+// Parallel runner with 500 tasks and 20 workers: all tasks must complete.
+#[test]
+fn stress_parallel_runner_500_tasks_20_workers() {
+    const N: usize = 500;
+    let pool = ThreadPool::new(20);
+    let runner = pool.create_task_runner(default_traits());
+
+    let completed = Arc::new(AtomicUsize::new(0));
+    let latch = Latch::new(N);
+
+    for _ in 0..N {
+        let c = Arc::clone(&completed);
+        let l = Arc::clone(&latch);
+        runner.post_task(Box::new(move || {
+            c.fetch_add(1, Ordering::Relaxed);
+            l.count_down();
+        }));
+    }
+
+    latch.wait();
+    pool.shutdown();
+    assert_eq!(completed.load(Ordering::SeqCst), N);
+}
+
+// High contention: many sequenced runners and a parallel runner all share the
+// same thread pool.  Verify total task count and per-runner ordering together.
+#[test]
+fn stress_mixed_sequenced_and_parallel_high_contention() {
+    const SEQ_RUNNERS: usize = 20;
+    const SEQ_TASKS: usize = 200;
+    const PAR_TASKS: usize = 300;
+    const TOTAL: usize = SEQ_RUNNERS * SEQ_TASKS + PAR_TASKS;
+
+    let pool = ThreadPool::new(12);
+    let total_completed = Arc::new(AtomicUsize::new(0));
+    let latch = Latch::new(TOTAL);
+
+    // Sequenced runners.
+    for _ in 0..SEQ_RUNNERS {
+        let runner = pool.create_sequenced_task_runner(default_traits());
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        for i in 0..SEQ_TASKS {
+            let c = Arc::clone(&counter);
+            let t = Arc::clone(&total_completed);
+            let l = Arc::clone(&latch);
+            runner.post_task(Box::new(move || {
+                let prev = c.fetch_add(1, Ordering::SeqCst);
+                assert_eq!(prev, i);
+                t.fetch_add(1, Ordering::Relaxed);
+                l.count_down();
+            }));
+        }
+    }
+
+    // Parallel runner.
+    let par_runner = pool.create_task_runner(default_traits());
+    for _ in 0..PAR_TASKS {
+        let t = Arc::clone(&total_completed);
+        let l = Arc::clone(&latch);
+        par_runner.post_task(Box::new(move || {
+            t.fetch_add(1, Ordering::Relaxed);
+            l.count_down();
+        }));
+    }
+
+    latch.wait();
+    pool.shutdown();
+    assert_eq!(total_completed.load(Ordering::SeqCst), TOTAL);
+}
+
+// Parallel runner with many workers but few tasks: ensure no tasks are lost
+// even when workers outnumber tasks.
+#[test]
+fn stress_more_workers_than_tasks() {
+    const WORKERS: usize = 32;
+    const TASKS: usize = 10;
+
+    let pool = ThreadPool::new(WORKERS);
+    let runner = pool.create_task_runner(default_traits());
+
+    let completed = Arc::new(AtomicUsize::new(0));
+    let latch = Latch::new(TASKS);
+
+    for _ in 0..TASKS {
+        let c = Arc::clone(&completed);
+        let l = Arc::clone(&latch);
+        runner.post_task(Box::new(move || {
+            c.fetch_add(1, Ordering::Relaxed);
+            l.count_down();
+        }));
+    }
+
+    latch.wait();
+    pool.shutdown();
+    assert_eq!(completed.load(Ordering::SeqCst), TASKS);
+}
+
+// Sequenced runner under high worker count: ordering guarantee must hold
+// even when many idle workers are competing for the same sequence.
+#[test]
+fn stress_sequenced_runner_with_many_competing_workers() {
+    const WORKERS: usize = 32;
+    const N: usize = 500;
+
+    let pool = ThreadPool::new(WORKERS);
+    let runner = pool.create_sequenced_task_runner(default_traits());
+
+    let counter = Arc::new(AtomicUsize::new(0));
+    let latch = Latch::new(N);
+
+    for i in 0..N {
+        let c = Arc::clone(&counter);
+        let l = Arc::clone(&latch);
+        runner.post_task(Box::new(move || {
+            let prev = c.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(prev, i, "ordering violated with {} workers", WORKERS);
+            l.count_down();
+        }));
+    }
+
+    latch.wait();
+    pool.shutdown();
 }
