@@ -1,3 +1,4 @@
+pub mod bind;
 pub mod sequence_token;
 pub mod sequenced_task_runner;
 pub mod task;
@@ -6,6 +7,7 @@ pub mod task_traits;
 pub mod thread_pool;
 
 // Convenient re-exports for the most commonly used public types.
+pub use bind::{bind_once, IntoArc};
 pub use sequence_token::SequenceToken;
 pub use sequenced_task_runner::SequencedTaskRunner;
 pub use task_runner::TaskRunner;
