@@ -10,10 +10,14 @@
 //!     is appended to the sequence and dispatched *after* the current event
 //!     finishes, never inline.
 //!
+//! Each internal task is posted via bind_once(Weak<Self>, ...).  Dropping the
+//! EventBus frees the object immediately — pending tasks become no-ops rather
+//! than keeping the bus alive until the queue drains.
+//!
 //! Run with:
 //!   cargo run --example event_bus
 
-use rust_task::{SequencedTaskRunner, TaskTraits, ThreadPool};
+use rust_task::{bind_once, SequencedTaskRunner, TaskTraits, ThreadPool};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 
@@ -28,17 +32,16 @@ enum AppEvent {
 
 // ── EventBus ──────────────────────────────────────────────────────────────────
 
-// Arc<dyn Fn> so callbacks can be cheaply cloned out of the table before
-// calling them — this releases the Mutex before any callback runs.
 type Callback<E> = Arc<dyn Fn(&E) + Send + Sync + 'static>;
 
 struct BusState<E> {
-    // Vec preserves insertion order so dispatch order is deterministic.
     subscribers: Vec<(u64, Callback<E>)>,
 }
 
 struct EventBus<E: Send + 'static> {
-    state: Arc<Mutex<BusState<E>>>,
+    // Mutex is embedded directly — no extra Arc needed because all tasks
+    // reach state through Arc<Self>, not a separately-cloned Arc<Mutex<...>>.
+    state: Mutex<BusState<E>>,
     runner: Arc<dyn SequencedTaskRunner>,
     next_id: AtomicU64,
 }
@@ -46,58 +49,42 @@ struct EventBus<E: Send + 'static> {
 impl<E: Send + 'static> EventBus<E> {
     fn new(pool: &Arc<ThreadPool>) -> Arc<Self> {
         Arc::new(Self {
-            state: Arc::new(Mutex::new(BusState {
-                subscribers: Vec::new(),
-            })),
+            state: Mutex::new(BusState { subscribers: Vec::new() }),
             runner: pool.create_sequenced_task_runner(TaskTraits::default()),
             next_id: AtomicU64::new(0),
         })
     }
 
-    // Registers a subscriber.  The ID is allocated immediately (atomic), but
-    // the registration itself is posted to the sequence, so it takes effect
-    // before any subsequent publish() call posted after this one.
-    fn subscribe(&self, cb: impl Fn(&E) + Send + Sync + 'static) -> u64 {
+    // self: &Arc<Self> so we can call Arc::downgrade(self) for bind_once.
+    // Callers write bus.subscribe(...) as usual — Rust auto-refs the Arc.
+    fn subscribe(self: &Arc<Self>, cb: impl Fn(&E) + Send + Sync + 'static) -> u64 {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let state = Arc::clone(&self.state);
-        self.runner.post_task(Box::new(move || {
-            state.lock().unwrap().subscribers.push((id, Arc::new(cb)));
+        self.runner.post_task(bind_once(Arc::downgrade(self), move |bus| {
+            bus.state.lock().unwrap().subscribers.push((id, Arc::new(cb)));
         }));
         id
     }
 
-    fn unsubscribe(&self, id: u64) {
-        let state = Arc::clone(&self.state);
-        self.runner.post_task(Box::new(move || {
-            state.lock().unwrap().subscribers.retain(|(sid, _)| *sid != id);
+    fn unsubscribe(self: &Arc<Self>, id: u64) {
+        self.runner.post_task(bind_once(Arc::downgrade(self), move |bus| {
+            bus.state.lock().unwrap().subscribers.retain(|(sid, _)| *sid != id);
         }));
     }
 
-    fn publish(&self, event: E) {
-        let state = Arc::clone(&self.state);
-        self.runner.post_task(Box::new(move || {
-            // Snapshot the callback list under the lock, then release it before
-            // calling any callback.  This means:
-            //   • The lock is never held while user code runs (no risk of
-            //     contention if a callback is slow).
-            //   • A callback calling publish() just posts a new task to the
-            //     sequence — it never tries to acquire the Mutex inline.
-            let cbs: Vec<Callback<E>> = state
-                .lock()
-                .unwrap()
-                .subscribers
-                .iter()
+    fn publish(self: &Arc<Self>, event: E) {
+        self.runner.post_task(bind_once(Arc::downgrade(self), move |bus| {
+            let cbs: Vec<Callback<E>> = bus.state.lock().unwrap()
+                .subscribers.iter()
                 .map(|(_, cb)| Arc::clone(cb))
                 .collect();
-
             for cb in cbs {
                 cb(&event);
             }
         }));
     }
 
-    // Posts a one-shot closure after all previously-posted operations.
-    // Use this to know when a batch of publishes has been fully dispatched.
+    // flush does NOT use bind_once: the done callback must always fire so
+    // the caller's barrier is never left waiting forever.
     fn flush(&self, done: impl FnOnce() + Send + 'static) {
         self.runner.post_task(Box::new(done));
     }
@@ -129,9 +116,9 @@ fn main() {
     let l = Arc::clone(&log);
     bus.subscribe(move |e| {
         let s = match e {
-            AppEvent::UserLoggedIn(u)              => format!("[logger] login:   {u}"),
-            AppEvent::MessageSent { from, text }   => format!("[logger] message: {from} → {text}"),
-            AppEvent::UserLoggedOut(u)             => format!("[logger] logout:  {u}"),
+            AppEvent::UserLoggedIn(u)            => format!("[logger] login:   {u}"),
+            AppEvent::MessageSent { from, text } => format!("[logger] message: {from} → {text}"),
+            AppEvent::UserLoggedOut(u)           => format!("[logger] logout:  {u}"),
         };
         l.lock().unwrap().push(s);
     });
@@ -149,10 +136,7 @@ fn main() {
     wait_flush(&bus);
     print_log(&log);
 
-    // ── 2. Unsubscribe serialized with publish ─────────────────────────────────
-    //
-    // unsubscribe() and the next publish() go through the same sequence, so
-    // the removal is guaranteed to happen before the logout is dispatched.
+    // ── 2. Unsubscribe serialized with publish ────────────────────────────────
 
     println!("Step 2: unsubscribe audit, then publish logout (audit must NOT see it)");
 
@@ -162,15 +146,7 @@ fn main() {
     wait_flush(&bus);
     print_log(&log);
 
-    // ── 3. Re-entrant publish ──────────────────────────────────────────────────
-    //
-    // The auto-welcome subscriber calls bus.publish() inside its callback.
-    // That publish is posted to the sequence and runs AFTER the current
-    // dispatch task finishes — there is no inline re-dispatch.
-    //
-    // We need two flushes to observe the full result:
-    //   flush 1 → drains "login bob" dispatch (which enqueues the welcome message)
-    //   flush 2 → drains the welcome message dispatch
+    // ── 3. Re-entrant publish ─────────────────────────────────────────────────
 
     println!("Step 3: auto-welcome subscriber calls publish() inside callback (re-entrant)");
 
@@ -179,7 +155,6 @@ fn main() {
     bus.subscribe(move |e| {
         if let AppEvent::UserLoggedIn(u) = e {
             l.lock().unwrap().push(format!("[welcom] queuing welcome for {u}"));
-            // Re-entrant publish: appended to sequence, NOT dispatched inline.
             bus2.publish(AppEvent::MessageSent {
                 from: "system".into(),
                 text: format!("Welcome, {u}!"),
@@ -189,10 +164,32 @@ fn main() {
 
     bus.publish(AppEvent::UserLoggedIn("bob".into()));
 
-    wait_flush(&bus); // drain up to and including "login bob" dispatch
-    wait_flush(&bus); // drain the welcome message that was queued by the callback
+    wait_flush(&bus); // drain "login bob" (which enqueues the welcome message)
+    wait_flush(&bus); // drain the welcome message
 
     print_log(&log);
+
+    // ── 4. Dropping the bus cancels pending tasks ─────────────────────────────
+    //
+    // Because every task is posted via bind_once(Weak<Self>, ...), dropping the
+    // last Arc<EventBus> immediately frees the object.  Tasks already in the
+    // queue become no-ops — the bus does not stay alive until they drain.
+
+    println!("Step 4: drop bus, verify object is freed immediately");
+
+    {
+        let tmp_bus = EventBus::<AppEvent>::new(&pool);
+        let weak = Arc::downgrade(&tmp_bus);
+
+        // Post a task that would run after we drop the bus.
+        tmp_bus.publish(AppEvent::UserLoggedIn("ghost".into()));
+
+        drop(tmp_bus); // strong count → 0: object freed here
+
+        assert!(weak.upgrade().is_none(), "bus should be freed immediately");
+        println!("  bus freed immediately after drop ✓");
+    }
+    println!();
 
     pool.shutdown();
 }
