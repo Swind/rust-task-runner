@@ -48,8 +48,10 @@ impl TaskRunner for PooledSequencedTaskRunner {
         delay: Duration,
     ) -> bool {
         let ready_time = std::time::Instant::now() + delay;
-        self.sequence.push_delayed_task(Task::new(callback), ready_time);
-        self.delayed_task_manager.add_sequence(ready_time, Arc::clone(&self.sequence));
+        self.sequence
+            .push_delayed_task(Task::new(callback), ready_time);
+        self.delayed_task_manager
+            .add_sequence(ready_time, Arc::clone(&self.sequence));
         true
     }
 
@@ -97,7 +99,11 @@ mod tests {
 
     fn make_runner(
         num_threads: usize,
-    ) -> (Arc<ThreadGroup>, Arc<DelayedTaskManager>, Arc<PooledSequencedTaskRunner>) {
+    ) -> (
+        Arc<ThreadGroup>,
+        Arc<DelayedTaskManager>,
+        Arc<PooledSequencedTaskRunner>,
+    ) {
         let group = ThreadGroup::new(num_threads);
         let dtm = DelayedTaskManager::new(Arc::clone(&group));
         let runner = PooledSequencedTaskRunner::new(
@@ -191,7 +197,10 @@ mod tests {
         group.join_all();
         dtm.shutdown();
 
-        assert_eq!(*reply_sequence.lock().unwrap(), Some(runner_a.sequence_token()));
+        assert_eq!(
+            *reply_sequence.lock().unwrap(),
+            Some(runner_a.sequence_token())
+        );
     }
 
     #[test]

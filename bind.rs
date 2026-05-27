@@ -64,7 +64,9 @@ mod tests {
 
     impl Counter {
         fn new() -> Arc<Self> {
-            Arc::new(Self { count: Mutex::new(0) })
+            Arc::new(Self {
+                count: Mutex::new(0),
+            })
         }
         fn increment(&self) {
             *self.count.lock().unwrap() += 1;
@@ -96,7 +98,7 @@ mod tests {
         let task = bind_once(Arc::downgrade(&counter), |c| c.increment());
         drop(counter); // object freed here
         task(); // should be a no-op
-                // counter is gone; just verify task() didn't panic
+        // counter is gone; just verify task() didn't panic
     }
 
     #[test]

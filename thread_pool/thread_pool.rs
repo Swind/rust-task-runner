@@ -232,7 +232,10 @@ mod tests {
             }),
         );
 
-        assert!(!posted, "SkipOnShutdown task should be rejected after shutdown");
+        assert!(
+            !posted,
+            "SkipOnShutdown task should be rejected after shutdown"
+        );
         assert!(!*ran.lock().unwrap(), "Task should not have run");
 
         pool.thread_group.join_all();
@@ -244,8 +247,10 @@ mod tests {
         let pool = ThreadPool::new(2);
         pool.task_tracker.shutdown();
 
-        let result =
-            pool.post_task(traits_with(TaskShutdownBehavior::SkipOnShutdown), Box::new(|| {}));
+        let result = pool.post_task(
+            traits_with(TaskShutdownBehavior::SkipOnShutdown),
+            Box::new(|| {}),
+        );
         assert!(!result);
 
         pool.thread_group.join_all();

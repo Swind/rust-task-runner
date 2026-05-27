@@ -17,7 +17,10 @@ struct Latch {
 
 impl Latch {
     fn new(n: usize) -> Arc<Self> {
-        Arc::new(Self { count: Mutex::new(n), cvar: Condvar::new() })
+        Arc::new(Self {
+            count: Mutex::new(n),
+            cvar: Condvar::new(),
+        })
     }
 
     fn count_down(&self) {
@@ -318,8 +321,10 @@ fn continue_on_shutdown_task_can_be_posted_after_shutdown_starts() {
     // shutdown_started=true and join_all() would be accepted.
     //
     // What we CAN assert: SkipOnShutdown is rejected after shutdown.
-    let rejected =
-        !pool.post_task(traits_with(TaskShutdownBehavior::SkipOnShutdown), Box::new(|| {}));
+    let rejected = !pool.post_task(
+        traits_with(TaskShutdownBehavior::SkipOnShutdown),
+        Box::new(|| {}),
+    );
     assert!(rejected, "SkipOnShutdown should be rejected after shutdown");
 }
 
@@ -372,7 +377,11 @@ fn stress_sequenced_runner_1000_tasks_in_order() {
         let l = Arc::clone(&latch);
         runner.post_task(Box::new(move || {
             let prev = c.fetch_add(1, Ordering::SeqCst);
-            assert_eq!(prev, i, "task {} ran out of order (counter was {})", i, prev);
+            assert_eq!(
+                prev, i,
+                "task {} ran out of order (counter was {})",
+                i, prev
+            );
             l.count_down();
         }));
     }

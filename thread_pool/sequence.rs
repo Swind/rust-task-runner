@@ -38,7 +38,9 @@ impl Ord for DelayedTask {
     fn cmp(&self, other: &Self) -> Ordering {
         // Natural order: earlier deadline = smaller value.
         // Combined with BinaryHeap<Reverse<>> this gives a min-heap by ready_time.
-        self.ready_time.cmp(&other.ready_time).then(self.sequence_num.cmp(&other.sequence_num))
+        self.ready_time
+            .cmp(&other.ready_time)
+            .then(self.sequence_num.cmp(&other.sequence_num))
     }
 }
 
@@ -117,18 +119,29 @@ impl TaskSource for Sequence {
     fn get_execution_environment(&self) -> ExecutionEnvironment {
         ExecutionEnvironment {
             token: self.token,
-            task_runner: self.task_runner.lock().unwrap().as_ref().and_then(|w| w.upgrade()),
+            task_runner: self
+                .task_runner
+                .lock()
+                .unwrap()
+                .as_ref()
+                .and_then(|w| w.upgrade()),
         }
     }
 
     fn get_sort_key(&self) -> TaskSourceSortKey {
-        TaskSourceSortKey { priority: self.traits.priority, ready_time: Instant::now() }
+        TaskSourceSortKey {
+            priority: self.traits.priority,
+            ready_time: Instant::now(),
+        }
     }
 
     fn has_ready_tasks(&self, now: Instant) -> bool {
         let inner = self.inner.lock().unwrap();
         !inner.immediate_queue.is_empty()
-            || inner.delayed_queue.peek().map_or(false, |Reverse(d)| d.ready_time <= now)
+            || inner
+                .delayed_queue
+                .peek()
+                .map_or(false, |Reverse(d)| d.ready_time <= now)
     }
 
     fn will_run_task(&self) -> RunStatus {
@@ -152,7 +165,10 @@ impl TaskSource for Sequence {
         let inner = self.inner.lock().unwrap();
         let now = Instant::now();
         !inner.immediate_queue.is_empty()
-            || inner.delayed_queue.peek().map_or(false, |Reverse(d)| d.ready_time <= now)
+            || inner
+                .delayed_queue
+                .peek()
+                .map_or(false, |Reverse(d)| d.ready_time <= now)
     }
 
     fn will_re_enqueue(&self, now: Instant) -> bool {

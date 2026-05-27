@@ -38,7 +38,9 @@ impl Ord for DelayedEntry {
     fn cmp(&self, other: &Self) -> Ordering {
         // Natural order: earlier deadline = smaller.  Combined with BinaryHeap<Reverse<>>
         // this gives a min-heap sorted by ready_time.
-        self.ready_time.cmp(&other.ready_time).then(self.id.cmp(&other.id))
+        self.ready_time
+            .cmp(&other.ready_time)
+            .then(self.id.cmp(&other.id))
     }
 }
 
@@ -79,7 +81,11 @@ impl DelayedTaskManager {
         {
             let mut inner = self.inner.lock().unwrap();
             let id = NEXT_ENTRY_ID.fetch_add(1, AtomicOrdering::Relaxed);
-            inner.heap.push(Reverse(DelayedEntry { ready_time, id, sequence }));
+            inner.heap.push(Reverse(DelayedEntry {
+                ready_time,
+                id,
+                sequence,
+            }));
         }
         // Wake the timer thread in case the new entry has an earlier deadline.
         self.condvar.notify_one();

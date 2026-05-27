@@ -22,7 +22,11 @@ impl PooledParallelTaskRunner {
         thread_group: Arc<ThreadGroup>,
         delayed_task_manager: Arc<DelayedTaskManager>,
     ) -> Self {
-        Self { traits, thread_group, delayed_task_manager }
+        Self {
+            traits,
+            thread_group,
+            delayed_task_manager,
+        }
     }
 }
 
@@ -72,7 +76,11 @@ mod tests {
 
     fn make_runner(
         num_threads: usize,
-    ) -> (Arc<ThreadGroup>, Arc<DelayedTaskManager>, PooledParallelTaskRunner) {
+    ) -> (
+        Arc<ThreadGroup>,
+        Arc<DelayedTaskManager>,
+        PooledParallelTaskRunner,
+    ) {
         let group = ThreadGroup::new(num_threads);
         let dtm = DelayedTaskManager::new(Arc::clone(&group));
         let runner = PooledParallelTaskRunner::new(

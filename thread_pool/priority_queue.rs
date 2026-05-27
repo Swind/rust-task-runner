@@ -41,12 +41,17 @@ pub struct PriorityQueue {
 
 impl PriorityQueue {
     pub fn new() -> Self {
-        Self { heap: BinaryHeap::new() }
+        Self {
+            heap: BinaryHeap::new(),
+        }
     }
 
     pub fn push(&mut self, task_source: Arc<dyn TaskSource>) {
         let sort_key = task_source.get_sort_key();
-        self.heap.push(QueueEntry { sort_key, task_source });
+        self.heap.push(QueueEntry {
+            sort_key,
+            task_source,
+        });
     }
 
     pub fn pop(&mut self) -> Option<Arc<dyn TaskSource>> {

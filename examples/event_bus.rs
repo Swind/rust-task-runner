@@ -17,7 +17,7 @@
 //! Run with:
 //!   cargo run --example event_bus
 
-use rust_task::{bind_once, SequencedTaskRunner, TaskTraits, ThreadPool};
+use rust_task::{SequencedTaskRunner, TaskTraits, ThreadPool, bind_once};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 
@@ -49,7 +49,9 @@ struct EventBus<E: Send + 'static> {
 impl<E: Send + 'static> EventBus<E> {
     fn new(pool: &Arc<ThreadPool>) -> Arc<Self> {
         Arc::new(Self {
-            state: Mutex::new(BusState { subscribers: Vec::new() }),
+            state: Mutex::new(BusState {
+                subscribers: Vec::new(),
+            }),
             runner: pool.create_sequenced_task_runner(TaskTraits::default()),
             next_id: AtomicU64::new(0),
         })
@@ -59,32 +61,43 @@ impl<E: Send + 'static> EventBus<E> {
     // Callers write bus.subscribe(...) as usual — Rust auto-refs the Arc.
     fn subscribe(self: &Arc<Self>, cb: impl Fn(&E) + Send + Sync + 'static) -> u64 {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        self.runner.post_task(bind_once(Arc::downgrade(self), move |bus| {
-            bus.state.lock().unwrap().subscribers.push((id, Arc::new(cb)));
-        }));
+        self.runner
+            .post_task(bind_once(Arc::downgrade(self), move |bus| {
+                bus.state
+                    .lock()
+                    .unwrap()
+                    .subscribers
+                    .push((id, Arc::new(cb)));
+            }));
         id
     }
 
     fn unsubscribe(self: &Arc<Self>, id: u64) {
-        self.runner.post_task(bind_once(Arc::downgrade(self), move |bus| {
-            bus.state.lock().unwrap().subscribers.retain(|(sid, _)| *sid != id);
-        }));
+        self.runner
+            .post_task(bind_once(Arc::downgrade(self), move |bus| {
+                bus.state
+                    .lock()
+                    .unwrap()
+                    .subscribers
+                    .retain(|(sid, _)| *sid != id);
+            }));
     }
 
     fn publish(self: &Arc<Self>, event: E) {
-        self.runner.post_task(bind_once(Arc::downgrade(self), move |bus| {
-            let cbs: Vec<Callback<E>> = bus
-                .state
-                .lock()
-                .unwrap()
-                .subscribers
-                .iter()
-                .map(|(_, cb)| Arc::clone(cb))
-                .collect();
-            for cb in cbs {
-                cb(&event);
-            }
-        }));
+        self.runner
+            .post_task(bind_once(Arc::downgrade(self), move |bus| {
+                let cbs: Vec<Callback<E>> = bus
+                    .state
+                    .lock()
+                    .unwrap()
+                    .subscribers
+                    .iter()
+                    .map(|(_, cb)| Arc::clone(cb))
+                    .collect();
+                for cb in cbs {
+                    cb(&event);
+                }
+            }));
     }
 
     // flush does NOT use bind_once: the done callback must always fire so
@@ -132,12 +145,17 @@ fn main() {
     let l = Arc::clone(&log);
     let audit_id = bus.subscribe(move |e| {
         if let AppEvent::UserLoggedIn(u) = e {
-            l.lock().unwrap().push(format!("[audit ] {u} authenticated"));
+            l.lock()
+                .unwrap()
+                .push(format!("[audit ] {u} authenticated"));
         }
     });
 
     bus.publish(AppEvent::UserLoggedIn("alice".into()));
-    bus.publish(AppEvent::MessageSent { from: "alice".into(), text: "hello, world".into() });
+    bus.publish(AppEvent::MessageSent {
+        from: "alice".into(),
+        text: "hello, world".into(),
+    });
 
     wait_flush(&bus);
     print_log(&log);
@@ -160,7 +178,9 @@ fn main() {
     let l = Arc::clone(&log);
     bus.subscribe(move |e| {
         if let AppEvent::UserLoggedIn(u) = e {
-            l.lock().unwrap().push(format!("[welcom] queuing welcome for {u}"));
+            l.lock()
+                .unwrap()
+                .push(format!("[welcom] queuing welcome for {u}"));
             bus2.publish(AppEvent::MessageSent {
                 from: "system".into(),
                 text: format!("Welcome, {u}!"),
