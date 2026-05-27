@@ -54,6 +54,39 @@ where
     })
 }
 
+/// Binds a `Weak<T>` and a repeating callback into an `Arc<dyn Fn() + Send +
+/// Sync>`.
+///
+/// Unlike [`bind_once`], the returned closure can be called any number of
+/// times.  Each call upgrades the `Weak<T>`; if the object has been dropped
+/// the call is a no-op.
+///
+/// Always takes a `Weak<T>` (never `Arc<T>`) so the closure never holds a
+/// strong reference and never extends the object's lifetime.
+///
+/// The returned `Arc<dyn Fn() + Send + Sync + 'static>` satisfies
+/// `impl Fn() + Send + Sync + 'static`, so it can be passed directly to
+/// [`RepeatingTimer::start`].
+///
+/// # Examples
+///
+/// ```ignore
+/// let cb = bind_repeating(Arc::downgrade(&handler), |h| h.on_tick());
+/// timer.start(Duration::from_secs(1), cb);
+/// // Dropping `handler` makes every future tick a no-op.
+/// ```
+pub fn bind_repeating<T, F>(weak: Weak<T>, f: F) -> Arc<dyn Fn() + Send + Sync + 'static>
+where
+    T: Send + Sync + 'static,
+    F: Fn(Arc<T>) + Send + Sync + 'static,
+{
+    Arc::new(move || {
+        if let Some(arc) = weak.upgrade() {
+            f(arc);
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,5 +142,37 @@ mod tests {
         let weak = Arc::downgrade(&counter);
         drop(counter);
         assert!(weak.upgrade().is_none(), "object should be freed");
+    }
+
+    // ── bind_repeating ────────────────────────────────────────────────────────
+
+    #[test]
+    fn repeating_runs_multiple_times() {
+        let counter = Counter::new();
+        let cb = bind_repeating(Arc::downgrade(&counter), |c| c.increment());
+        cb();
+        cb();
+        cb();
+        assert_eq!(counter.get(), 3);
+    }
+
+    #[test]
+    fn repeating_skips_after_drop() {
+        let counter = Counter::new();
+        let cb = bind_repeating(Arc::downgrade(&counter), |c| c.increment());
+        cb(); // runs: count = 1
+        drop(counter);
+        cb(); // skipped: object freed
+        cb(); // skipped
+        // just verify no panic
+    }
+
+    #[test]
+    fn repeating_does_not_extend_lifetime() {
+        let counter = Counter::new();
+        let weak = Arc::downgrade(&counter);
+        let _cb = bind_repeating(Arc::downgrade(&counter), |c| c.increment());
+        drop(counter);
+        assert!(weak.upgrade().is_none(), "object should be freed immediately");
     }
 }
