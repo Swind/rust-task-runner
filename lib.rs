@@ -1,5 +1,7 @@
 pub mod bind;
 #[cfg(target_os = "linux")]
+pub mod file_posix;
+#[cfg(target_os = "linux")]
 pub mod io_task_runner;
 pub mod sequence_token;
 pub mod sequenced_task_runner;
@@ -14,6 +16,8 @@ pub mod timer;
 
 // Convenient re-exports for the most commonly used public types.
 pub use bind::{IntoArc, bind_once, bind_repeating};
+#[cfg(target_os = "linux")]
+pub use file_posix::FilePosix;
 #[cfg(target_os = "linux")]
 pub use io_task_runner::{FdWatchController, FdWatcher, IoTaskRunner, WatchMode};
 pub use sequence_token::SequenceToken;
