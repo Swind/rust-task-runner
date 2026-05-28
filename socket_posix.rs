@@ -273,7 +273,12 @@ impl Drop for SocketPosix {
 
 impl FdWatcher for SocketPosix {
     fn on_file_can_read_without_blocking(&self, fd: RawFd) {
-        match self.pending_read.lock().unwrap().take() {
+        // Extract the pending op before calling any callback.  Rust extends the
+        // lifetime of a temporary MutexGuard through an entire `match` scrutinee,
+        // so using `match self.pending_read.lock()...take()` would hold the lock
+        // while the callback runs — deadlocking if the callback calls read() again.
+        let op = self.pending_read.lock().unwrap().take();
+        match op {
             Some(ReadOp::ReadIfReady(cb)) => cb(Ok(())),
             Some(ReadOp::Read { len, cb }) => {
                 let mut buf = vec![0u8; len];
@@ -290,13 +295,15 @@ impl FdWatcher for SocketPosix {
     }
 
     fn on_file_can_write_without_blocking(&self, fd: RawFd) {
-        // Connect completion takes priority over a pending write.
-        if let Some(cb) = self.pending_connect.lock().unwrap().take() {
+        // Same lock-before-callback pattern: extract then release before calling.
+        let connect_cb = self.pending_connect.lock().unwrap().take();
+        if let Some(cb) = connect_cb {
             cb(check_connect_error(fd));
             return;
         }
 
-        if let Some(WriteOp { buf, cb }) = self.pending_write.lock().unwrap().take() {
+        let write_op = self.pending_write.lock().unwrap().take();
+        if let Some(WriteOp { buf, cb }) = write_op {
             let n = unsafe { libc::write(fd, buf.as_ptr() as *const libc::c_void, buf.len()) };
             if n >= 0 {
                 cb(Ok(n as usize));
