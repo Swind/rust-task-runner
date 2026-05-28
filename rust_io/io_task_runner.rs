@@ -405,9 +405,13 @@ fn run_loop(runner: Arc<IoTaskRunner>) {
         loop {
             let task = runner.tasks.lock().unwrap().pop_front();
             let Some(task) = task else { break };
-            if let Some(ref s) = slot { s.task_started(); }
+            if let Some(ref s) = slot {
+                s.task_started();
+            }
             task();
-            if let Some(ref s) = slot { s.task_finished(); }
+            if let Some(ref s) = slot {
+                s.task_finished();
+            }
         }
 
         // Run delayed tasks whose deadline has passed.
@@ -418,9 +422,13 @@ fn run_loop(runner: Arc<IoTaskRunner>) {
                 if q.peek().is_some_and(|t| t.deadline <= now) { q.pop() } else { None }
             };
             let Some(t) = task else { break };
-            if let Some(ref s) = slot { s.task_started(); }
+            if let Some(ref s) = slot {
+                s.task_started();
+            }
             (t.callback)();
-            if let Some(ref s) = slot { s.task_finished(); }
+            if let Some(ref s) = slot {
+                s.task_finished();
+            }
         }
 
         if runner.shutdown.load(Ordering::Acquire) {
@@ -489,14 +497,22 @@ fn run_loop(runner: Arc<IoTaskRunner>) {
 
             if let Some(w) = watcher_opt {
                 if can_read {
-                    if let Some(ref s) = slot { s.task_started(); }
+                    if let Some(ref s) = slot {
+                        s.task_started();
+                    }
                     w.on_file_can_read_without_blocking(fd);
-                    if let Some(ref s) = slot { s.task_finished(); }
+                    if let Some(ref s) = slot {
+                        s.task_finished();
+                    }
                 }
                 if can_write {
-                    if let Some(ref s) = slot { s.task_started(); }
+                    if let Some(ref s) = slot {
+                        s.task_started();
+                    }
                     w.on_file_can_write_without_blocking(fd);
-                    if let Some(ref s) = slot { s.task_finished(); }
+                    if let Some(ref s) = slot {
+                        s.task_finished();
+                    }
                 }
             }
         }

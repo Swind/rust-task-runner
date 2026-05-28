@@ -29,15 +29,13 @@ fn demo_metrics() {
 
     let monitor = TaskMonitor::builder()
         .on_metrics(move |m| {
-            println!(
-                "  task done — queue={:?}  exec={:?}",
-                m.queue_time, m.execution_time
-            );
+            println!("  task done — queue={:?}  exec={:?}", m.queue_time, m.execution_time);
             log_clone.lock().unwrap().push(m.clone());
         })
         .build();
 
-    // 4 workers so all 3 tasks can run in parallel and the Barrier releases cleanly.
+    // 4 workers so all 3 tasks can run in parallel and the Barrier releases
+    // cleanly.
     let pool = ThreadPool::new_with_monitor(4, Arc::clone(&monitor));
 
     let barrier = Arc::new(Barrier::new(4)); // 3 tasks + main thread
@@ -62,7 +60,8 @@ fn demo_metrics() {
     println!("  all {} tasks reported metrics\n", captured.len());
 }
 
-// ── Demo 2: hang detection ────────────────────────────────────────────────────
+// ── Demo 2: hang detection
+// ────────────────────────────────────────────────────
 
 fn demo_hang_detection() {
     println!("=== Demo 2: Hang detection ===");
@@ -74,10 +73,7 @@ fn demo_hang_detection() {
         .hang_threshold(Duration::from_millis(50))
         .watchdog_interval(Duration::from_millis(20))
         .on_hang(move |h| {
-            println!(
-                "  HANG: worker {} stuck for {:?}",
-                h.worker_id, h.stuck_duration
-            );
+            println!("  HANG: worker {} stuck for {:?}", h.worker_id, h.stuck_duration);
             hangs_clone.lock().unwrap().push(h.clone());
         })
         .build();

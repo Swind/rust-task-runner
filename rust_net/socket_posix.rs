@@ -245,7 +245,10 @@ impl SocketPosix {
     ///
     /// The callback is one-shot: call `accept()` again inside the callback to
     /// keep accepting.  Must be called from the IO thread.
-    pub fn accept(self: &Arc<Self>, cb: impl FnOnce(io::Result<Arc<SocketPosix>>) + Send + 'static) {
+    pub fn accept(
+        self: &Arc<Self>,
+        cb: impl FnOnce(io::Result<Arc<SocketPosix>>) + Send + 'static,
+    ) {
         let fd = self.fd.load(Ordering::Relaxed);
         assert!(fd >= 0, "socket not open");
 

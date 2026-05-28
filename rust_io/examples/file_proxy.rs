@@ -2,13 +2,13 @@
 //!
 //! Three demos:
 //!
-//!  1. **Write then read** — write a file asynchronously, then read it back
-//!     by chaining a read call from inside the write callback.
+//!  1. **Write then read** — write a file asynchronously, then read it back by
+//!     chaining a read call from inside the write callback.
 //!  2. **Append** — build a file incrementally with three append operations,
 //!     each chained from the previous callback.
-//!  3. **Concurrent reads** — issue multiple reads against the same file at
-//!     the same time; all callbacks fire on the IO thread even though the
-//!     actual reads run in parallel on the thread pool.
+//!  3. **Concurrent reads** — issue multiple reads against the same file at the
+//!     same time; all callbacks fire on the IO thread even though the actual
+//!     reads run in parallel on the thread pool.
 //!
 //! Run with:
 //!   cargo run --example file_proxy
@@ -27,8 +27,7 @@ mod linux {
     use std::sync::{Arc, Barrier, Mutex};
 
     fn temp_path(tag: &str) -> std::path::PathBuf {
-        std::env::temp_dir()
-            .join(format!("rust_task_fp_example_{}_{}", std::process::id(), tag))
+        std::env::temp_dir().join(format!("rust_task_fp_example_{}_{}", std::process::id(), tag))
     }
 
     pub fn run() {

@@ -3,7 +3,8 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-// ── Public types ──────────────────────────────────────────────────────────────
+// ── Public types
+// ──────────────────────────────────────────────────────────────
 
 /// Timing data delivered after each task completes.
 #[derive(Debug, Clone)]
@@ -25,7 +26,8 @@ pub struct HangInfo {
     pub stuck_duration: Duration,
 }
 
-// ── TaskMonitor ───────────────────────────────────────────────────────────────
+// ── TaskMonitor
+// ───────────────────────────────────────────────────────────────
 
 struct Inner {
     reference: Instant,
@@ -65,8 +67,9 @@ impl TaskMonitor {
     /// Register a worker thread with this monitor.
     ///
     /// Returns a [`WorkerSlot`] that the worker uses to bracket each task
-    /// execution with [`WorkerSlot::task_started`] / [`WorkerSlot::task_finished`].
-    /// The slot is automatically zeroed (idle) when dropped.
+    /// execution with [`WorkerSlot::task_started`] /
+    /// [`WorkerSlot::task_finished`]. The slot is automatically zeroed
+    /// (idle) when dropped.
     pub fn register_worker(&self) -> WorkerSlot {
         let slot = Arc::new(AtomicU64::new(0));
         let mut slots = self.inner.slots.lock().unwrap();
@@ -79,7 +82,8 @@ impl TaskMonitor {
     ///
     /// Call this at **post time** (not execution time) so that `queue_time` is
     /// measured from posting to the moment the worker starts running the task.
-    /// The `on_metrics` callback is invoked immediately after the task finishes.
+    /// The `on_metrics` callback is invoked immediately after the task
+    /// finishes.
     pub fn wrap_task(
         &self,
         task: Box<dyn FnOnce() + Send + 'static>,
@@ -109,7 +113,8 @@ impl Drop for TaskMonitor {
     }
 }
 
-// ── WorkerSlot ────────────────────────────────────────────────────────────────
+// ── WorkerSlot
+// ────────────────────────────────────────────────────────────────
 
 /// RAII handle representing one worker thread's monitoring slot.
 ///
@@ -146,7 +151,8 @@ impl Drop for WorkerSlot {
     }
 }
 
-// ── Builder ───────────────────────────────────────────────────────────────────
+// ── Builder
+// ───────────────────────────────────────────────────────────────────
 
 /// Builder for [`TaskMonitor`].
 pub struct TaskMonitorBuilder {
@@ -216,7 +222,8 @@ impl TaskMonitorBuilder {
     }
 }
 
-// ── Watchdog loop ─────────────────────────────────────────────────────────────
+// ── Watchdog loop
+// ─────────────────────────────────────────────────────────────
 
 fn watchdog_loop(inner: Arc<Inner>, interval: Duration) {
     let (lock, cvar) = &inner.shutdown_notify;
@@ -229,8 +236,7 @@ fn watchdog_loop(inner: Arc<Inner>, interval: Duration) {
         }
 
         let now_nanos = inner.reference.elapsed().as_nanos() as u64;
-        let threshold_nanos =
-            inner.hang_threshold.as_nanos().min(u64::MAX as u128) as u64;
+        let threshold_nanos = inner.hang_threshold.as_nanos().min(u64::MAX as u128) as u64;
 
         // Collect hung workers while holding the lock, then release before
         // calling user callbacks to avoid potential lock-order issues.
@@ -391,9 +397,7 @@ mod tests {
     #[test]
     fn no_watchdog_without_hang_threshold() {
         // If hang_threshold is not set, the watchdog thread should NOT be started.
-        let monitor = TaskMonitor::builder()
-            .on_metrics(|_| {})
-            .build();
+        let monitor = TaskMonitor::builder().on_metrics(|_| {}).build();
         assert!(monitor.watchdog.lock().unwrap().is_none());
     }
 
@@ -416,7 +420,9 @@ mod tests {
 
         let barrier = Arc::new(Barrier::new(2));
         let b = Arc::clone(&barrier);
-        let wrapped = monitor.wrap_task(Box::new(move || { b.wait(); }));
+        let wrapped = monitor.wrap_task(Box::new(move || {
+            b.wait();
+        }));
 
         let done = Arc::new(Barrier::new(2));
         let d = Arc::clone(&done);

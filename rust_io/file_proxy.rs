@@ -50,9 +50,8 @@ impl FileProxy {
     /// the same `FileProxy` are serialised.  Multiple `FileProxy` instances
     /// can share the same `pool`.
     pub fn new(path: impl Into<PathBuf>, pool: Arc<ThreadPool>) -> Self {
-        let runner = pool.create_sequenced_task_runner(
-            TaskTraits { may_block: true, ..TaskTraits::default() },
-        );
+        let runner = pool
+            .create_sequenced_task_runner(TaskTraits { may_block: true, ..TaskTraits::default() });
         Self { path: path.into(), runner }
     }
 
@@ -80,10 +79,7 @@ impl FileProxy {
     }
 
     /// Read the entire file.  Callback runs on the IO thread.
-    pub fn read_all(
-        &self,
-        cb: impl FnOnce(io::Result<Vec<u8>>) + Send + 'static,
-    ) {
+    pub fn read_all(&self, cb: impl FnOnce(io::Result<Vec<u8>>) + Send + 'static) {
         let path = self.path.clone();
         let io = IoTaskRunner::current().expect("must be called from the IO thread");
         self.runner.post_task(Box::new(move || {
@@ -111,11 +107,7 @@ impl FileProxy {
 
     /// Create or truncate the file and write `data` from byte 0.
     /// Callback runs on the IO thread.
-    pub fn write_all(
-        &self,
-        data: Vec<u8>,
-        cb: impl FnOnce(io::Result<()>) + Send + 'static,
-    ) {
+    pub fn write_all(&self, data: Vec<u8>, cb: impl FnOnce(io::Result<()>) + Send + 'static) {
         let path = self.path.clone();
         let io = IoTaskRunner::current().expect("must be called from the IO thread");
         self.runner.post_task(Box::new(move || {
@@ -126,11 +118,7 @@ impl FileProxy {
 
     /// Append `data` to the end of the file; creates it if it does not exist.
     /// Callback receives bytes written; runs on the IO thread.
-    pub fn append(
-        &self,
-        data: Vec<u8>,
-        cb: impl FnOnce(io::Result<usize>) + Send + 'static,
-    ) {
+    pub fn append(&self, data: Vec<u8>, cb: impl FnOnce(io::Result<usize>) + Send + 'static) {
         let path = self.path.clone();
         let io = IoTaskRunner::current().expect("must be called from the IO thread");
         self.runner.post_task(Box::new(move || {
@@ -140,7 +128,8 @@ impl FileProxy {
     }
 }
 
-// ── Blocking helpers ──────────────────────────────────────────────────────────
+// ── Blocking helpers
+// ──────────────────────────────────────────────────────────
 
 fn to_cpath(path: &Path) -> io::Result<CString> {
     CString::new(path.as_os_str().as_bytes())

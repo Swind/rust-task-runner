@@ -194,9 +194,13 @@ fn worker_loop(group: Arc<ThreadGroup>, monitor: Option<Arc<TaskMonitor>>) {
             RunStatus::Disallowed => false,
             _ => {
                 if let Some(task) = source.take_task() {
-                    if let Some(ref s) = slot { s.task_started(); }
+                    if let Some(ref s) = slot {
+                        s.task_started();
+                    }
                     (task.callback)();
-                    if let Some(ref s) = slot { s.task_finished(); }
+                    if let Some(ref s) = slot {
+                        s.task_finished();
+                    }
                 }
                 true
             }
