@@ -39,6 +39,26 @@ TcpServerSocket    open + server defaults + bind + listen; accept → TcpClientS
 types are `Arc` — you own the value directly and keep *it* alive (it owns the
 `Arc<SocketPosix>` inside).
 
+## The `StreamSocket` trait
+
+`StreamSocket` (Chromium's `net::StreamSocket`) abstracts "a connected, reliable,
+bidirectional byte stream you can read/write":
+
+```rust
+pub trait StreamSocket: Send + Sync {
+    fn read(&self, len: usize, cb: ReadCallback);     // Box<dyn FnOnce(io::Result<Vec<u8>>) + Send>
+    fn write(&self, buf: Vec<u8>, cb: WriteCallback); // Box<dyn FnOnce(io::Result<usize>) + Send>
+    fn disconnect(&self);
+}
+```
+
+`TcpClientSocket` implements it (the plaintext base case). The point of the
+abstraction is that a TLS socket implements it too, so a layer written against
+`dyn StreamSocket` (e.g. HTTP) works over both `http://` and `https://` — see
+[`rust_tls.md`](rust_tls.md). Note the trait uses **boxed** callbacks (it must be
+object-safe), whereas the inherent `TcpClientSocket` methods take `impl FnOnce`;
+a boxed `FnOnce` satisfies that bound, so they interoperate freely.
+
 ## Client — TcpClientSocket
 
 `connect` does open + `set_default_options_for_client()` + connect in one call.

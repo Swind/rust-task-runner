@@ -96,6 +96,14 @@ io.post_task(Box::new(move || {
 `write` / `bind` / `listen` / `accept` / `local_addr` / `close`. `bind` here is
 the bare `bind(2)` — TCP options live in `TcpSocket`.
 
+## StreamSocket
+
+`StreamSocket` (Chromium's `net::StreamSocket`) is the trait abstracting a
+connected, reliable byte stream — `read` / `write` / `disconnect` with boxed
+callbacks. `TcpClientSocket` implements it, and so does `rust_tls::TlsClientSocket`,
+so a higher layer (e.g. HTTP) written against `dyn StreamSocket` runs unchanged
+over plaintext and TLS.
+
 ### read vs. read_if_ready
 
 - `read(len, cb)` — the socket owns the buffer and delivers the bytes.

@@ -1,6 +1,7 @@
 use std::io;
 use std::net::SocketAddr;
 
+use crate::stream_socket::{ReadCallback, StreamSocket, WriteCallback};
 use crate::tcp_socket::TcpSocket;
 
 /// A connected TCP stream — the client-facing handle.
@@ -69,5 +70,84 @@ impl TcpClientSocket {
 impl Default for TcpClientSocket {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// A connected `TcpClientSocket` is a plaintext byte stream — the base case a
+/// TLS layer will wrap. The inherent methods already match the trait shape, so
+/// these just forward (a boxed `FnOnce` still satisfies the `impl FnOnce`
+/// bound).
+impl StreamSocket for TcpClientSocket {
+    fn read(&self, len: usize, cb: ReadCallback) {
+        TcpClientSocket::read(self, len, cb);
+    }
+
+    fn write(&self, buf: Vec<u8>, cb: WriteCallback) {
+        TcpClientSocket::write(self, buf, cb);
+    }
+
+    fn disconnect(&self) {
+        TcpClientSocket::disconnect(self);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::stream_socket::StreamSocket;
+    use rust_io::IoTaskRunner;
+    use rust_task::TaskRunner;
+    use std::io::{Read as _, Write as _};
+    use std::net::TcpListener;
+    use std::sync::{Arc, Barrier, Mutex};
+
+    /// Drive a real connection purely through `dyn StreamSocket`, proving the
+    /// abstraction is usable without naming the concrete type. A std::net echo
+    /// listener runs on a helper thread.
+    #[test]
+    fn usable_through_dyn_stream_socket() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 64];
+            let n = conn.read(&mut buf).unwrap();
+            conn.write_all(&buf[..n]).unwrap();
+        });
+
+        let io = IoTaskRunner::new();
+        let client = Arc::new(TcpClientSocket::new());
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let barrier = Arc::new(Barrier::new(2));
+
+        let c = Arc::clone(&client);
+        let recv = Arc::clone(&received);
+        let b = Arc::clone(&barrier);
+        io.post_task(Box::new(move || {
+            let c_inner = Arc::clone(&c);
+            c.connect(addr, move |result| {
+                result.expect("connect failed");
+                // From here on, only the trait object is used.
+                let stream: Arc<dyn StreamSocket> = c_inner;
+                let s2 = Arc::clone(&stream);
+                stream.write(
+                    b"hello".to_vec(),
+                    Box::new(move |w| {
+                        w.expect("write failed");
+                        s2.read(
+                            64,
+                            Box::new(move |r| {
+                                *recv.lock().unwrap() = r.expect("read failed");
+                                b.wait();
+                            }),
+                        );
+                    }),
+                );
+            });
+        }));
+
+        barrier.wait();
+        io.shutdown();
+        assert_eq!(*received.lock().unwrap(), b"hello");
     }
 }
