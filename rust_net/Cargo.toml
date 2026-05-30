@@ -28,3 +28,7 @@ rcgen = "0.13"
 [[example]]
 name = "https_get"
 required-features = ["tls"]
+
+[[example]]
+name = "https_fetch"
+required-features = ["tls"]

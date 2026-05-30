@@ -83,8 +83,9 @@ tls.handshake(Box::new(move |r| {
 
 ```bash
 cd rust_net
-cargo run --features tls --example https_get -- example.com   # real HTTPS GET, prints response head
-cargo test --features tls                                      # offline: self-signed (rcgen) round trip
+cargo run --features tls --example https_get -- example.com             # real HTTPS GET, prints response head
+cargo run --features tls --example https_fetch -- https://example.com/  # fetch a page and print its body
+cargo test --features tls                                               # offline: self-signed (rcgen) round trip
 ```
 
 ## Chromium correspondence

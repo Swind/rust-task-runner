@@ -161,7 +161,8 @@ fire.
 ```bash
 cargo run --example tcp_echo                      # TcpServerSocket + TcpClientSocket echo, one IO thread
 cargo run --example socket_posix                  # low-level SocketPosix: connect+write+read, ReadIfReady, streaming
-cargo run --features tls --example https_get -- example.com   # HTTPS GET over TcpClientSocket + TlsClientSocket
+cargo run --features tls --example https_get -- example.com            # HTTPS GET, prints the response head
+cargo run --features tls --example https_fetch -- https://example.com/ # fetch a page and print its body
 ```
 
 ```bash
