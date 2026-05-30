@@ -28,7 +28,7 @@ task scheduling stays cross-platform, I/O primitives are Linux-specific.
 |-------|-------------|----------|
 | [`rust_task`](rust_task/) | Thread pool, task runners, sequencing, shutdown lifecycle, task monitoring | cross-platform |
 | [`rust_io`](rust_io/) | epoll event loop, async file I/O | Linux |
-| [`rust_net`](rust_net/) | Async TCP socket (client + server) | Linux |
+| [`rust_net`](rust_net/) | Async TCP socket (client + server), `StreamSocket` abstraction, async TLS (`tls` feature) | Linux |
 
 ### Dependency graph
 
@@ -36,7 +36,7 @@ task scheduling stays cross-platform, I/O primitives are Linux-specific.
 rust_task  ←── rust_io  ←── rust_net
 ```
 
-`rust_task` has no platform-specific dependencies — only `std`. `rust_io` and `rust_net` require Linux (epoll / `accept4`).
+`rust_task` has no platform-specific dependencies — only `std`. `rust_io` and `rust_net` require Linux (epoll / `accept4`). Async TLS lives in `rust_net` behind the optional `tls` feature, which adds a `rustls` dependency; without it `rust_net` stays dependency-light.
 
 ---
 
@@ -117,6 +117,29 @@ io.shutdown();
 ```
 
 → See [`rust_net/README.md`](rust_net/README.md) for the full API including server-side `bind` / `listen` / `accept`.
+
+---
+
+## rust_net TLS (`tls` feature)
+
+Enabling `rust_net`'s `tls` feature adds `TlsClientSocket`: async TLS over any `StreamSocket`, using `rustls`'s sans-IO core. Port of Chromium's `net::SSLClientSocket`.
+
+```rust
+use rust_net::{StreamSocket, TcpClientSocket, TlsClientSocket};
+use rustls::pki_types::ServerName;
+
+// On the IO thread, after the TCP transport has connected:
+let name = ServerName::try_from("example.com").unwrap().to_owned();
+let tls  = TlsClientSocket::new(transport, config, name).unwrap();
+
+tls.handshake(Box::new(move |r| {
+    r.unwrap();
+    // TlsClientSocket is itself a StreamSocket: read/write plaintext from here.
+    tls.write(b"GET / HTTP/1.0\r\n\r\n".to_vec(), Box::new(|_| {}));
+}));
+```
+
+→ See [`rust_net/README.md`](rust_net/README.md) for config setup and the `https_get` example.
 
 ---
 

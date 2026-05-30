@@ -100,9 +100,55 @@ the bare `bind(2)` — TCP options live in `TcpSocket`.
 
 `StreamSocket` (Chromium's `net::StreamSocket`) is the trait abstracting a
 connected, reliable byte stream — `read` / `write` / `disconnect` with boxed
-callbacks. `TcpClientSocket` implements it, and so does `rust_tls::TlsClientSocket`,
-so a higher layer (e.g. HTTP) written against `dyn StreamSocket` runs unchanged
-over plaintext and TLS.
+callbacks. `TcpClientSocket` implements it, and so does `TlsClientSocket` (the
+`tls` feature), so a higher layer (e.g. HTTP) written against `dyn StreamSocket`
+runs unchanged over plaintext and TLS.
+
+## TLS (`tls` feature)
+
+The optional `tls` feature adds `TlsClientSocket` — async TLS over any
+`StreamSocket`, using [`rustls`](https://github.com/rustls/rustls)'s **sans-IO**
+core. Port of the client side of Chromium's `net::SSLClientSocket`. rustls does
+no I/O itself; `TlsClientSocket` pumps its bytes through the transport's
+callbacks on the IO thread:
+
+```
+plaintext write → conn.writer() encrypts → write_tls → transport.write
+plaintext read  ← conn.reader() decrypts ← read_tls  ← transport.read
+handshake       → ping-pong of the two until is_handshaking() == false
+```
+
+`TlsClientSocket` also implements `StreamSocket`, so after the handshake you
+read/write plaintext through the same trait an HTTP layer uses for plaintext TCP.
+
+```rust
+use rust_net::{StreamSocket, TcpClientSocket, TlsClientSocket};
+use rustls::pki_types::ServerName;
+use std::sync::Arc;
+
+// Built with the ring backend and no default provider — install one once.
+let _ = rustls::crypto::ring::default_provider().install_default();
+let mut roots = rustls::RootCertStore::empty();
+roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+let config = Arc::new(
+    rustls::ClientConfig::builder().with_root_certificates(roots).with_no_client_auth(),
+);
+
+// On the IO thread, transport already TCP-connected:
+let name = ServerName::try_from("example.com").unwrap().to_owned();
+let tls = TlsClientSocket::new(transport, config, name).unwrap(); // Arc<TlsClientSocket>
+tls.handshake(Box::new(move |r| {
+    r.unwrap();
+    tls_handle.write(b"GET / HTTP/1.0\r\nHost: example.com\r\n\r\n".to_vec(), Box::new(|_| {}));
+}));
+```
+
+`server_name` must be the host name (not an IP) — it drives SNI and certificate
+verification. Keep the `TlsClientSocket` and its transport alive until callbacks
+fire.
+
+`TlsClientSocket`: `new(transport, config, server_name) -> io::Result<Arc<Self>>`,
+`handshake(cb)`, and the `StreamSocket` methods (`read` / `write` / `disconnect`).
 
 ### read vs. read_if_ready
 
@@ -113,6 +159,11 @@ over plaintext and TLS.
 ## Examples
 
 ```bash
-cargo run --example tcp_echo        # TcpServerSocket + TcpClientSocket echo, one IO thread
-cargo run --example socket_posix    # low-level SocketPosix: connect+write+read, ReadIfReady, streaming
+cargo run --example tcp_echo                      # TcpServerSocket + TcpClientSocket echo, one IO thread
+cargo run --example socket_posix                  # low-level SocketPosix: connect+write+read, ReadIfReady, streaming
+cargo run --features tls --example https_get -- example.com   # HTTPS GET over TcpClientSocket + TlsClientSocket
+```
+
+```bash
+cargo test --features tls           # includes the offline TLS round-trip test (rcgen self-signed cert)
 ```

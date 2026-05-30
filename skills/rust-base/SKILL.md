@@ -1,6 +1,6 @@
 ---
 name: rust-base
-description: How to use the rust_base workspace — the rust_task, rust_io, and rust_net crates that port Chromium's base/ threading and net/ I/O model to Rust. Use this whenever you are writing or reviewing code that imports rust_task, rust_io, or rust_net; whenever you see ThreadPool, SequencedTaskRunner, TaskRunner, TaskTraits, bind_once, RepeatingTimer, TaskMonitor, IoTaskRunner, FileProxy, FdWatcher, or SocketPosix; or whenever someone asks how to post tasks to a thread pool, schedule delayed/sequenced work, watch a file descriptor with epoll, do async file I/O, or run an async TCP client/server in this repo. Reach for this skill even if the user only describes the behavior ("run this off the main thread", "fire a callback when the socket is readable") without naming a type.
+description: How to use the rust_base workspace — the rust_task, rust_io, and rust_net crates that port Chromium's base/ threading and net/ I/O model to Rust (rust_net's optional `tls` feature adds async TLS via rustls). Use this whenever you are writing or reviewing code that imports rust_task, rust_io, or rust_net; whenever you see ThreadPool, SequencedTaskRunner, TaskRunner, TaskTraits, bind_once, RepeatingTimer, TaskMonitor, IoTaskRunner, FileProxy, FdWatcher, SocketPosix, TcpClientSocket, TcpServerSocket, StreamSocket, or TlsClientSocket; or whenever someone asks how to post tasks to a thread pool, schedule delayed/sequenced work, watch a file descriptor with epoll, do async file I/O, run an async TCP client/server, or do async TLS / HTTPS (rustls) in this repo. Reach for this skill even if the user only describes the behavior ("run this off the main thread", "fire a callback when the socket is readable", "make an https request") without naming a type.
 ---
 
 # rust_base
@@ -12,19 +12,20 @@ I/O model to idiomatic Rust:
 |-------|-------------------|----------|
 | `rust_task` | Thread pool, task runners, sequencing, delayed tasks, shutdown lifecycle, monitoring | cross-platform (`std` only) |
 | `rust_io`   | epoll event loop + async file I/O — **builds on `rust_task`** | Linux |
-| `rust_net`  | Async TCP socket (client + server) — **builds on `rust_io`** | Linux |
+| `rust_net`  | Async TCP socket (client + server), `StreamSocket` trait, async TLS (`tls` feature) — **builds on `rust_io`** | Linux |
 
 ```
 rust_task  ←── rust_io  ←── rust_net
 ```
 
 **`rust_task` is the foundation and the focus of this page.** Master it first —
-its task-runner and `bind_once` semantics carry directly into the other two
-crates. When the task at hand involves file descriptors, files, sockets, or an
-epoll loop, jump to the reference for that layer:
+its task-runner and `bind_once` semantics carry directly into the other
+crates. When the task at hand involves file descriptors, files, sockets, TLS, or
+an epoll loop, jump to the reference for that layer:
 
 - **Async file I/O or watching a raw fd with epoll** → read [`references/rust_io.md`](references/rust_io.md)
-- **Async TCP client or server** → read [`references/rust_net.md`](references/rust_net.md)
+- **Async TCP client or server (and the `StreamSocket` trait)** → read [`references/rust_net.md`](references/rust_net.md)
+- **Async TLS / HTTPS — `rust_net`'s `tls` feature (rustls)** → read [`references/rust_tls.md`](references/rust_tls.md)
 
 Those references assume you already understand the `rust_task` concepts below,
 so don't skip ahead.

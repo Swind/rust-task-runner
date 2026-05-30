@@ -6,9 +6,25 @@ edition = "2024"
 [lib]
 path = "lib.rs"
 
+[features]
+# Async TLS (TlsClientSocket) via rustls. Off by default so a plain TCP user
+# isn't forced to compile rustls + ring.
+tls = ["dep:rustls"]
+
+# rustls is cross-platform; the TLS *code* is still gated on target_os = "linux".
+[dependencies]
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 libc.workspace = true
 rust_io = { path = "../rust_io" }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 rust_task = { path = "../rust_task" }
+# For the tls feature's example / test:
+webpki-roots = "0.26"
+rcgen = "0.13"
+
+[[example]]
+name = "https_get"
+required-features = ["tls"]

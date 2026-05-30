@@ -55,7 +55,7 @@ pub trait StreamSocket: Send + Sync {
 `TcpClientSocket` implements it (the plaintext base case). The point of the
 abstraction is that a TLS socket implements it too, so a layer written against
 `dyn StreamSocket` (e.g. HTTP) works over both `http://` and `https://` — see
-[`rust_tls.md`](rust_tls.md). Note the trait uses **boxed** callbacks (it must be
+the `tls` feature in [`rust_tls.md`](rust_tls.md). Note the trait uses **boxed** callbacks (it must be
 object-safe), whereas the inherent `TcpClientSocket` methods take `impl FnOnce`;
 a boxed `FnOnce` satisfies that bound, so they interoperate freely.
 
