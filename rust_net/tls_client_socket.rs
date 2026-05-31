@@ -109,9 +109,29 @@ impl TlsClientSocket {
                 Ok(data) => {
                     let r = {
                         let mut conn = next.conn.lock().unwrap();
+                        // `read_tls` only takes as much as its internal deframer
+                        // buffer can hold in one call, so a single call may not
+                        // consume the whole chunk. Loop until the slice is
+                        // drained, processing packets between reads so the buffer
+                        // keeps making room; dropping leftover bytes would
+                        // desync the record stream and cause a DecryptError.
                         let mut slice = data.as_slice();
-                        conn.read_tls(&mut slice)
-                            .and_then(|_| conn.process_new_packets().map_err(io::Error::other))
+                        let mut result = Ok(());
+                        while !slice.is_empty() {
+                            match conn.read_tls(&mut slice) {
+                                Ok(0) => break, // no progress possible
+                                Ok(_) => {}
+                                Err(e) => {
+                                    result = Err(e);
+                                    break;
+                                }
+                            }
+                            if let Err(e) = conn.process_new_packets() {
+                                result = Err(io::Error::other(e));
+                                break;
+                            }
+                        }
+                        result
                     };
                     match r {
                         Ok(_) => done(Ok(())),
